@@ -8,26 +8,23 @@ monkey-patch lúc chạy.
 
 ## 1. Cài đặt
 
-Repo này chỉ chứa **lớp FL**. Code SPCIL lấy từ repo gốc:
+Repo **tự đủ** — clone một lần là chạy được, không cần kéo thêm gì:
 
 ```bash
 git clone https://github.com/TongXuanVu/Spcil-fl.git
 cd Spcil-fl
-
-# Keo code SPCIL goc vao cung thu muc (khong ghi de file nao cua repo nay)
-git clone --depth 1 <URL-repo-SPCIL> _spcil_tmp
-robocopy _spcil_tmp . /E /XD .git /XF README.md .gitignore
-rmdir /s /q _spcil_tmp
+pip install -r requirements.txt   # neu co, hoac: pip install torch numpy scikit-learn tqdm matplotlib seaborn
 ```
 
-Sau bước này thư mục phải có cả hai nhóm:
+Trong đó gồm hai nhóm file:
 
 ```
-main.py  trainer.py  models/  utils/  convs/  losses/  exps/     <- SPCIL goc
-main_fl.py  fl/  exps_fl/  README_FL.md                          <- lop FL
+main.py  trainer.py  models/  utils/  convs/  losses/  exps/     <- SPCIL goc, NGUYEN VEN
+main_fl.py  fl/  exps_fl/  README_FL.md                          <- lop FL them vao
 ```
 
-`python main.py --config exps/cic_iot23_der.json` vẫn chạy bản tập trung như cũ.
+Code SPCIL **không bị sửa một dòng nào**. `python main.py --config exps/cic_iot23_der.json`
+vẫn chạy bản tập trung y như repo gốc.
 
 ---
 
