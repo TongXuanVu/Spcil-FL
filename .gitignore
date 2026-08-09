@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pth
+*.pt
+logs/
+ckpt/
+temp_ckpt/
+data/
+_spcil_tmp/
+
+# Code SPCIL goc keo ve tu repo khac — KHONG commit vao repo nay.
+# Xem README_FL.md muc 1.
+/main.py
+/trainer.py
+/models/
+/convs/
+/losses/
+/exps/
+/utils/

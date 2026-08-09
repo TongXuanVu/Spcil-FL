@@ -1,0 +1,41 @@
+{
+  "_comment": "SPCIL-FL — kich ban FULL DATA. 100 client, 6 task x 30 round = 180 round. Khop quy uoc voi hfin-der/wa va afsic-ids ban 100 client.",
+  "prefix": "cic_iot23_fl",
+  "dataset": "cic_iot23_fl",
+  "model_name": "der",
+  "convnet_type": "cnn1d",
+
+  "_comment_fl": "Mo phong mot tien trinh: client chay tuan tu, FedAvg co trong so theo so mau (McMahan 2017).",
+  "num_clients": 100,
+  "num_rounds": 30,
+  "fedavg_weighted": true,
+
+  "_comment_task": "34 lop chia [6,6,6,6,5,5]. KHONG suy tu init_cls/increment vi cong thuc do cho [6,6,6,6,6,4].",
+  "init_cls": 6,
+  "increment": 6,
+  "task_increments": [6, 6, 6, 6, 5, 5],
+
+  "_comment_epoch": "epochs = so epoch CUC BO moi round (khong phai moi task).",
+  "epochs": 1,
+  "init_epoch": 1,
+  "batch_size": 512,
+  "eval_batch_size": 4096,
+
+  "_comment_mem": "memory_percent 0.01 = replay 1%, dong nhat voi nhan 'replay 1%' cua cac phuong phap khac.",
+  "memory_size": 5000,
+  "memory_per_class": 20,
+  "memory_percent": 0.01,
+  "fixed_memory": false,
+
+  "_comment_spcil": "Hai loss rieng cua SPCIL, giu nguyen mac dinh cua ban tap trung.",
+  "lambda_a": 0.01,
+  "lambda_b": 0.01,
+
+  "shuffle": false,
+  "device": [0],
+  "seed": [42],
+  "keep_last_ckpt": 3,
+
+  "data_root": "",
+  "fewshot_dir": ""
+}

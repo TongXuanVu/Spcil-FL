@@ -1,0 +1,36 @@
+{
+  "_comment": "SPCIL-FL — kich ban 10-SHOT. Chay kem --resume tu ckpt_task00_FINAL.pth cua lan chay 1% de dung chung task 0.",
+  "prefix": "cic_iot23_fl",
+  "dataset": "cic_iot23_fl",
+  "model_name": "der",
+  "convnet_type": "cnn1d",
+
+  "num_clients": 100,
+  "num_rounds": 30,
+  "fedavg_weighted": true,
+
+  "init_cls": 6,
+  "increment": 6,
+  "task_increments": [6, 6, 6, 6, 5, 5],
+
+  "epochs": 1,
+  "init_epoch": 1,
+  "batch_size": 512,
+  "eval_batch_size": 4096,
+
+  "memory_size": 5000,
+  "memory_per_class": 20,
+  "memory_percent": 0.01,
+  "fixed_memory": false,
+
+  "lambda_a": 0.01,
+  "lambda_b": 0.01,
+
+  "shuffle": false,
+  "device": [0],
+  "seed": [42],
+  "keep_last_ckpt": 3,
+
+  "data_root": "",
+  "fewshot_dir": "/kaggle/input/datasets/tongxuanvu/iot100client/iot100client_fewshot/federated_data_10shot"
+}
