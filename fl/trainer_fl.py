@@ -2,11 +2,34 @@
 
 Mô phỏng một tiến trình: mọi client chạy tuần tự trong cùng chương trình. Mỗi round
 server nạp trọng số toàn cục vào từng client, client huấn luyện cục bộ, server lấy
-trung bình có trọng số theo số mẫu. Đúng FedAvg (McMahan et al. 2017), dễ debug, dễ
-lưu checkpoint và resume — cùng kiểu với AFSIC-IDS, HFIN, MalCL-FL trong dự án.
+trung bình có trọng số theo số mẫu — đúng FedAvg (McMahan et al. 2017). Dễ debug, dễ
+lưu checkpoint và resume; cùng kiểu với AFSIC-IDS, HFIN, MalCL-FL trong dự án.
 
     python main_fl.py --config exps_fl/cic_iot23_fl.json
+
+────────────────────────────────────────────────────────────────────────────────
+BỐN CHỖ PHẢI TRÁNH KHI GỌI LẠI CODE CỦA SPCIL
+────────────────────────────────────────────────────────────────────────────────
+`DER.incremental_train` được viết cho bối cảnh TẬP TRUNG: một lần gọi = trọn một
+task. Trong FL nó bị gọi 100 client × 30 round × 6 task, nên bốn hành vi sau trở
+thành thảm hoạ nếu cứ gọi thẳng:
+
+1. `incremental_train(skip_train=True)` VẪN dựng exemplar memory (der.py:72-78),
+   trừ khi đặt `skip_rehearsal = True`. Vòng mở rộng kiến trúc sẽ chạy herding trên
+   trọng số ngẫu nhiên cho 100 client × 6 task.
+2. `incremental_train(...)` dựng lại exemplar memory sau MỖI lần huấn luyện
+   (der.py:99). Trong FL thành 18.000 lượt herding thay vì 600.
+3. `_init_train` đánh giá trên `test_loader` sau mỗi epoch nếu khác None
+   (der.py:188). Tập test là 14 triệu mẫu — không được để client làm việc đó.
+4. `_init_train` ghi một checkpoint sau MỖI epoch (der.py:199-209). 100 client cùng
+   ghi đè một file, 18.000 lượt ghi vô nghĩa, lại trùng tên với checkpoint của FL.
+
+Cách xử lý ở đây: KHÔNG gọi `incremental_train` để huấn luyện. Tự dựng train_loader
+rồi gọi thẳng `model._train(train_loader, None)` — vẫn dùng nguyên `L_SP` + `L_RS`
+của SPCIL — và chặn `torch.save` trong lúc đó. Exemplar memory chỉ dựng MỘT lần ở
+cuối mỗi task.
 """
+import contextlib
 import copy
 import csv
 import glob
@@ -17,11 +40,23 @@ from datetime import datetime
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from utils import factory
 from utils.data_manager import DataManager
 
 from fl import data_fl
+
+
+@contextlib.contextmanager
+def _suppress_torch_save():
+    """Chặn `torch.save` tạm thời — xem điểm 4 ở đầu file."""
+    original = torch.save
+    torch.save = lambda *a, **k: None
+    try:
+        yield
+    finally:
+        torch.save = original
 
 
 def average_weights(w, weights=None):
@@ -33,10 +68,7 @@ def average_weights(w, weights=None):
     for key in out.keys():
         ref = out[key]
         if not torch.is_floating_point(ref):
-            # num_batches_tracked và các bộ đếm nguyên khác
-            acc = 0.0
-            for i in range(len(w)):
-                acc += float(w[i][key]) * weights[i]
+            acc = sum(float(w[i][key]) * weights[i] for i in range(len(w)))
             out[key] = torch.tensor(round(acc / tot), dtype=ref.dtype)
             continue
         acc = torch.zeros_like(ref, dtype=torch.float64)
@@ -67,6 +99,19 @@ def train(args):
         args["seed"] = seed
         args["device"] = device
         _train_federated(args)
+
+
+def _expand_one(model, dm):
+    """Mở rộng kiến trúc DER thêm đúng một task, KHÔNG dựng exemplar memory.
+
+    `skip_rehearsal = True` chặn herding trên trọng số ngẫu nhiên (điểm 1 ở đầu
+    file). `after_task()` cộng `_known_classes`; vòng huấn luyện đặt lại giá trị
+    này mỗi round nên không ảnh hưởng.
+    """
+    model.skip_rehearsal = True
+    model.incremental_train(dm, skip_train=True)
+    model.after_task()
+    model.skip_rehearsal = False
 
 
 def _train_federated(args):
@@ -150,14 +195,19 @@ def _train_federated(args):
         logging.info(f"[RESUME] {os.path.basename(path)} -> Task {start_task}, "
                      f"Round {start_round}")
 
+    bs = args["batch_size"]
+    nw = args.get("num_workers", 0)
+
     for task in range(nb_tasks):
-        # DER thêm một backbone mỗi task -> phải mở rộng kiến trúc cho MỌI task,
-        # kể cả task bị bỏ qua khi resume.
-        global_model.incremental_train(client_dms[0], skip_train=True)
-        global_model.after_task()
+        known_before = sum(client_dms[0]._increments[:task])
+        total_now = known_before + client_dms[0]._increments[task]
+
+        # Mở rộng kiến trúc thêm đúng một task, KHÔNG dựng exemplar (điểm 1).
+        # Phải làm cho MỌI task kể cả task bị bỏ qua khi resume, vì DER thêm
+        # một backbone mỗi task.
+        _expand_one(global_model, client_dms[0])
         for c in range(num_clients):
-            local_models[c].incremental_train(client_dms[c], skip_train=True)
-            local_models[c].after_task()
+            _expand_one(local_models[c], client_dms[c])
 
         if task < start_task:
             continue
@@ -166,10 +216,9 @@ def _train_federated(args):
             global_model._network.load_state_dict(ckpt["model_state_dict"])
             logging.info("[RESUME] Da nap trong so toan cuc.")
 
-        known_before = sum(client_dms[0]._increments[:task])
-        total_now = known_before + client_dms[0]._increments[task]
         global_model._network.to(args["device"][0])
-        logging.info(f"\n===== TASK {task} | lop {known_before}-{total_now - 1} =====")
+        logging.info(f"\n===== TASK {task} | lop {known_before}-{total_now - 1} | "
+                     f"{len(global_model._network.convnets)} backbone =====")
 
         r0 = start_round if task == start_task else 0
         for rnd in range(r0, num_rounds):
@@ -182,23 +231,38 @@ def _train_federated(args):
 
             for c in range(num_clients):
                 dm = client_dms[c]
-                n_new = len(dm.get_dataset(np.arange(known_before, total_now),
-                                           source="train", mode="test"))
-                if n_new == 0 and local_models[c]._get_memory() is None:
+                mdl = local_models[c]
+
+                mdl._cur_task = task
+                mdl._known_classes = known_before
+                mdl._total_classes = total_now
+
+                train_set = dm.get_dataset(np.arange(known_before, total_now),
+                                           source="train", mode="train",
+                                           appendent=mdl._get_memory())
+                n_new = len(train_set)
+                if n_new == 0:
                     continue
 
-                local_models[c]._network.load_state_dict(gstate)
-                local_models[c]._network.to(args["device"][0])
-                # Lui lai mot task de incremental_train tinh dung khoang lop,
-                # va KHONG mo rong them backbone (da mo rong o tren).
-                local_models[c]._cur_task = task - 1
-                local_models[c]._known_classes = known_before
+                mdl._network.load_state_dict(gstate)
+                mdl._network.to(args["device"][0])
+                # DER: đóng băng các backbone của task trước, y như der.py:43-46
+                if task > 0:
+                    for i in range(task):
+                        for p in mdl._network.convnets[i].parameters():
+                            p.requires_grad = False
+
+                loader = DataLoader(train_set, batch_size=bs, shuffle=True,
+                                    num_workers=nw)
                 args["start_round"] = 0
-                local_models[c].incremental_train(dm)
+                # test_loader = None -> client KHONG danh gia tren 14 trieu mau
+                # (diem 3); chan torch.save de khong ghi checkpoint moi epoch (diem 4)
+                with _suppress_torch_save():
+                    mdl._train(loader, None)
 
                 w_local.append({k: v.detach().cpu() for k, v
-                                in local_models[c]._network.state_dict().items()})
-                n_local.append(max(n_new, 1))
+                                in mdl._network.state_dict().items()})
+                n_local.append(n_new)
                 active.append(c)
 
             if not w_local:
@@ -216,7 +280,7 @@ def _train_federated(args):
             global_model._cur_task = task
             global_model._known_classes = known_before
             global_model._total_classes = total_now
-            global_model.test_loader = torch.utils.data.DataLoader(
+            global_model.test_loader = DataLoader(
                 client_dms[0].get_dataset(np.arange(0, total_now),
                                           source="test", mode="test"),
                 batch_size=args.get("eval_batch_size", 4096), shuffle=False,
@@ -242,15 +306,17 @@ def _train_federated(args):
             _save_round_ckpt(ckpt_dir, global_model, task, rnd + 1, ground + 1, m,
                              known_before, args.get("keep_last_ckpt", 3))
 
-        # ── Hết task: dựng exemplar memory rồi lưu checkpoint FINAL ───────────
+        # ── Hết task: dựng exemplar memory MỘT LẦN cho mỗi client ─────────────
+        logging.info(f"  Dung exemplar memory cho {num_clients} client...")
         for c in range(num_clients):
-            local_models[c]._network.load_state_dict(global_model._network.state_dict())
-            local_models[c]._network.to(args["device"][0])
-            local_models[c]._cur_task = task
-            local_models[c]._known_classes = known_before
-            local_models[c]._total_classes = total_now
-            local_models[c].build_rehearsal_memory(client_dms[c],
-                                                   local_models[c].samples_per_class)
+            mdl = local_models[c]
+            mdl._network.load_state_dict(global_model._network.state_dict())
+            mdl._network.to(args["device"][0])
+            mdl._cur_task = task
+            mdl._known_classes = known_before
+            mdl._total_classes = total_now
+            with _suppress_torch_save():
+                mdl.build_rehearsal_memory(client_dms[c], mdl.samples_per_class)
 
         final = os.path.join(ckpt_dir, f"ckpt_task{task:02d}_FINAL.pth")
         torch.save({"task": task, "round": num_rounds,
@@ -258,7 +324,8 @@ def _train_federated(args):
                     "model_state_dict": global_model._network.state_dict(),
                     "known_classes": total_now,
                     "fewshot_dir": fs or "full"}, final)
-        logging.info(f"[CKPT-TASK] Da luu {os.path.basename(final)}")
+        logging.info(f"[CKPT-TASK] Da luu {os.path.basename(final)} | "
+                     f"exemplar client 0: {local_models[0].exemplar_size:,}")
 
         global_model._known_classes = total_now
         start_round = 0

@@ -47,7 +47,30 @@ AFSIC-IDS, HFIN, MalCL-FL. Đặt `"fedavg_weighted": false` nếu muốn trung 
 **`models/der.py` giữ nguyên**, kể cả hai loss riêng của SPCIL là `L_SP` (AdaSP) và
 `L_RS` (Multi-Similarity).
 
-### Ba chỗ dễ sai đã xử lý sẵn
+### Bốn hành vi của SPCIL phải chặn khi gọi lại trong FL
+
+`DER.incremental_train` viết cho bối cảnh **tập trung**: một lần gọi = trọn một task.
+Trong FL nó bị gọi 100 client × 30 round × 6 task, nên bốn hành vi sau thành thảm hoạ
+nếu gọi thẳng:
+
+| # | Hành vi | Ở đâu | Cách chặn |
+|---|---|---|---|
+| 1 | `skip_train=True` **vẫn** dựng exemplar memory | `der.py:72-78` | đặt `skip_rehearsal = True` |
+| 2 | dựng lại exemplar sau **mỗi** lần huấn luyện | `der.py:99` | không gọi `incremental_train` để huấn luyện; gọi thẳng `_train()` |
+| 3 | đánh giá trên `test_loader` sau **mỗi** epoch | `der.py:188` | truyền `test_loader=None` cho client |
+| 4 | ghi checkpoint sau **mỗi** epoch | `der.py:199-209` | chặn `torch.save` bằng context manager |
+
+Số lượt thao tác nặng cho một lần chạy 180 round, 100 client:
+
+| | Nếu gọi thẳng | Sau khi chặn |
+|---|---|---|
+| Herding (dựng exemplar) | 18.600 | **600** |
+| Đánh giá trên 14 triệu mẫu | 18.000 | **180** |
+| Ghi checkpoint | 18.000 | **186** |
+
+Client vẫn dùng nguyên `_train()` của SPCIL nên `L_SP` và `L_RS` không bị đụng tới.
+
+### Ba chỗ dễ sai khác đã xử lý sẵn
 
 1. **Thứ tự lớp.** `DataManager` của SPCIL tự suy thứ tự từ `np.unique(train_targets)`.
    Client chỉ giữ vài lớp thì mỗi client ra một thứ tự khác nhau, nhãn ánh xạ lệch,
