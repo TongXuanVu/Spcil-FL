@@ -280,9 +280,10 @@ def _train_federated(args):
             global_model._cur_task = task
             global_model._known_classes = known_before
             global_model._total_classes = total_now
+            # Chi client TEST_OWNER co tap test (xem data_fl.download_data)
             global_model.test_loader = DataLoader(
-                client_dms[0].get_dataset(np.arange(0, total_now),
-                                          source="test", mode="test"),
+                client_dms[data_fl.TEST_OWNER].get_dataset(
+                    np.arange(0, total_now), source="test", mode="test"),
                 batch_size=args.get("eval_batch_size", 4096), shuffle=False,
                 num_workers=0)
             m, _, _, _ = global_model.eval_task()

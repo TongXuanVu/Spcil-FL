@@ -31,6 +31,10 @@ TASK_INCREMENTS = [6, 6, 6, 6, 5, 5]
 
 DATASET_NAMES = ("cic_iot23_fl", "ciciot23_fl", "cic-iot23-fl")
 
+# Chỉ client này nạp tập test — xem ghi chú trong download_data().
+# Trainer đánh giá mô hình toàn cục bằng client_dms[TEST_OWNER].
+TEST_OWNER = 0
+
 # ── Trạng thái toàn cục, trainer đặt trước khi tạo mỗi DataManager ─────────────
 CLIENT_ID = 0
 FEWSHOT_DIR = None
@@ -158,20 +162,40 @@ class iCICIoT23FL:
             self.train_data = np.zeros((0, 33), dtype=np.float32)
             self.train_targets = np.zeros((0,), dtype=np.int64)
 
-        # Tập test dùng chung — cache ở cấp lớp để 100 DataManager không giữ
-        # 100 bản sao của file 1,96 GB.
-        if not hasattr(iCICIoT23FL, "_test_cache"):
-            tx, ty = _load(_find_test_file(root))
-            iCICIoT23FL._test_cache = (
-                (tx.numpy() if torch.is_tensor(tx) else np.asarray(tx)).astype(np.float32),
-                (ty.numpy() if torch.is_tensor(ty) else np.asarray(ty)).astype(np.int64),
-            )
-        self.test_data, self.test_targets = iCICIoT23FL._test_cache
+        # ── Tập test: CHỈ client 0 nạp thật ──────────────────────────────────
+        #
+        # Trainer chỉ dùng `client_dms[0]` để đánh giá mô hình toàn cục; 99 client
+        # còn lại không bao giờ đụng tới tập test. Nếu client nào cũng nạp thì:
+        #
+        #   - `DataManager._setup_data` gọi `_map_new_class_index` trên 14 triệu
+        #     nhãn, mà hàm đó là vòng lặp Python `order.index(x)` — khoảng 476
+        #     triệu phép tra cứu, mất ~13 giây MỖI client (22 phút cho 100 client);
+        #   - mỗi client giữ riêng một mảng int64 14 triệu phần tử = 0,11 GB,
+        #     tổng 11,2 GB RAM vứt đi.
+        #
+        # Client khác nhận mảng rỗng đúng số chiều — `get_dataset(source="test")`
+        # của chúng trả về tập rỗng, không ai gọi nên vô hại.
+        if cid == TEST_OWNER:
+            if not hasattr(iCICIoT23FL, "_test_cache"):
+                tx, ty = _load(_find_test_file(root))
+                iCICIoT23FL._test_cache = (
+                    (tx.numpy() if torch.is_tensor(tx) else np.asarray(tx)).astype(np.float32),
+                    (ty.numpy() if torch.is_tensor(ty) else np.asarray(ty)).astype(np.int64),
+                )
+                iCICIoT23FL._n_feat = iCICIoT23FL._test_cache[0].shape[1]
+            self.test_data, self.test_targets = iCICIoT23FL._test_cache
+        else:
+            n_feat = getattr(iCICIoT23FL, "_n_feat", None) \
+                or (self.train_data.shape[1] if len(self.train_data) else 33)
+            self.test_data = np.zeros((0, n_feat), dtype=np.float32)
+            self.test_targets = np.zeros((0,), dtype=np.int64)
 
         n_feat = self.train_data.shape[1] if len(self.train_data) else self.test_data.shape[1]
+        tag = " | co tap test" if cid == TEST_OWNER else ""
         print(f"[FL-DATA] Client {cid:>3}: train={len(self.train_targets):>9,} mau | "
               f"{len(np.unique(self.train_targets)):>2} lop | {n_feat} dac trung"
-              + (f" | few-shot: {os.path.basename(FEWSHOT_DIR)}" if FEWSHOT_DIR else ""))
+              + (f" | few-shot: {os.path.basename(FEWSHOT_DIR)}" if FEWSHOT_DIR else "")
+              + tag)
 
 
 def register():
