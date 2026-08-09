@@ -81,6 +81,24 @@ Client vẫn dùng nguyên `_train()` của SPCIL nên `L_SP` và `L_RS` không 
 
 ## 3. Chạy
 
+### Đường dẫn dữ liệu
+
+`--data_root` trỏ tới thư mục chứa `client_*_task_*.pt`. Script chấp nhận cả hai bố
+cục — trỏ vào `100 client` hay `100 client/federated_data` đều được, nó tự dò.
+
+**Ở máy:**
+
+```bat
+python main_fl.py --config exps_fl/cic_iot23_fl.json ^
+    --data_root "D:\FL\core\data_split\100 client"
+```
+
+Bỏ `--data_root` thì nó tự thử theo thứ tự: `D:\FL\core\data_split\100 client` →
+`C:\FederatedLearning\FL\core\data_split\100 client` → `/mnt/d/...` (WSL) → thư mục
+anh em của repo. Không thấy thì báo lỗi kèm danh sách đã thử.
+
+**Trên Kaggle:** để trống `--data_root`, nó tự quét `/kaggle/input`.
+
 ```python
 ROOT = "/kaggle/input/datasets/tongxuanvu/iot100client"
 DATA = f"{ROOT}/100client"

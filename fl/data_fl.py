@@ -52,31 +52,69 @@ def set_data_root(path):
     DATA_ROOT = path or None
 
 
+# Các vị trí thường gặp của bộ 100 client, thử theo thứ tự. Ưu tiên `--data_root`.
+_LOCAL_CANDIDATES = [
+    r"D:\FL\core\data_split\100 client",          # o D (sau khi chuyen tu C)
+    r"C:\FederatedLearning\FL\core\data_split\100 client",
+    "/mnt/d/FL/core/data_split/100 client",       # WSL
+]
+
+
 def _auto_root():
+    """Tìm thư mục chứa client_*_task_*.pt.
+
+    Thứ tự: --data_root -> /kaggle/input -> các đường dẫn quen thuộc -> thư mục
+    anh em của repo. Mỗi ứng viên đều thử cả `<dir>/federated_data` lẫn `<dir>`
+    vì hai bố cục đều tồn tại trong dự án.
+    """
+    def _ok(d):
+        for sub in (os.path.join(d, "federated_data"), d):
+            if os.path.exists(os.path.join(sub, "client_0_task_1.pt")):
+                return sub
+        return None
+
     if DATA_ROOT:
-        return DATA_ROOT
+        hit = _ok(DATA_ROOT)
+        if hit:
+            return hit
+        raise FileNotFoundError(
+            f"--data_root tro toi '{DATA_ROOT}' nhung khong thay client_0_task_1.pt "
+            f"o do hay trong '{os.path.join(DATA_ROOT, 'federated_data')}'")
+
     if os.path.exists("/kaggle/input"):
         hits = glob.glob("/kaggle/input/**/client_0_task_1.pt", recursive=True)
         if hits:
             return os.path.dirname(hits[0])
         raise FileNotFoundError("Khong tim thay client_0_task_1.pt trong /kaggle/input")
+
+    tried = []
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cand = os.path.join(os.path.dirname(here), "FL", "core", "data_split", "100 client")
-    for sub in (os.path.join(cand, "federated_data"), cand):
-        if os.path.exists(os.path.join(sub, "client_0_task_1.pt")):
-            return sub
-    raise FileNotFoundError(f"Khong tim thay du lieu 100 client (da thu {cand})")
+    for cand in _LOCAL_CANDIDATES + [
+            os.path.join(os.path.dirname(here), "FL", "core", "data_split", "100 client")]:
+        tried.append(cand)
+        hit = _ok(cand)
+        if hit:
+            return hit
+
+    raise FileNotFoundError(
+        "Khong tim thay du lieu 100 client. Da thu:\n  " + "\n  ".join(tried)
+        + "\nDung --data_root de chi dinh truc tiep, vi du:\n"
+        + r'  --data_root "D:\FL\core\data_split\100 client"')
 
 
 def _find_test_file(root):
+    """Tìm global_test_data.pt: cùng thư mục, thư mục cha, rồi thư mục ông."""
+    up1 = os.path.dirname(root)
+    up2 = os.path.dirname(up1)
     for p in (os.path.join(root, "global_test_data.pt"),
-              os.path.join(os.path.dirname(root), "global_test_data.pt")):
+              os.path.join(up1, "global_test_data.pt"),
+              os.path.join(up2, "global_test_data.pt")):
         if os.path.exists(p):
             return p
-    hits = glob.glob(os.path.join(os.path.dirname(root), "**", "global_test_data.pt"),
-                     recursive=True)
-    if hits:
-        return hits[0]
+    for base in (up1, up2):
+        hits = glob.glob(os.path.join(base, "**", "global_test_data.pt"), recursive=True)
+        if hits:
+            return hits[0]
     raise FileNotFoundError(f"Khong tim thay global_test_data.pt quanh {root}")
 
 
