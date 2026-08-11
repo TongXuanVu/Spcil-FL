@@ -263,6 +263,10 @@ class BaseLearner(object):
             m_c = self._m_for_class(data_manager, class_idx, m)
             mask = np.where(dummy_targets == class_idx)[0]
             dd, dt = dummy_data[mask][:m_c], dummy_targets[mask][:m_c]
+            
+            if len(dd) == 0:
+                continue
+
             self._data_memory = (
                 np.concatenate((self._data_memory, dd))
                 if len(self._data_memory) != 0
@@ -301,6 +305,9 @@ class BaseLearner(object):
             num_samples = len(idxes)
             self._class_sample_counts[class_idx] = num_samples
             
+            if num_samples == 0:
+                continue
+
             if self._memory_percent is not None:
                 m_c = max(1, int(round(num_samples * self._memory_percent)))
             else:
@@ -383,6 +390,10 @@ class BaseLearner(object):
             num_samples = len(data)
             # Cache so mau cua lop de _reduce_exemplar dung lai o cac task sau.
             self._class_sample_counts[class_idx] = num_samples
+            
+            if num_samples == 0:
+                continue
+
             if self._memory_percent is not None:
                 m_c = max(1, int(round(num_samples * self._memory_percent)))
             else:
