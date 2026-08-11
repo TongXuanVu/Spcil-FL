@@ -1,0 +1,26 @@
+# SPCIL-FL — thư viện cần cho ĐƯỜNG CHẠY FL (main_fl.py).
+#
+#     pip install -r requirements.txt
+#
+# Danh sách này lấy từ việc lần theo cây import bắt đầu ở `main_fl.py`, rồi chạy
+# thử đầu-cuối trên máy sạch. Không phải mọi import trong repo đều có ở đây —
+# xem mục "KHÔNG cần" bên dưới.
+
+torch>=1.13
+torchvision>=0.14      # utils/data_manager.py import transforms o cap module
+numpy>=1.21,<2         # torch 1.13 bao "Numpy is not available" voi numpy>=2
+scikit-learn>=1.0      # f1/precision/recall trong vong danh gia
+scipy>=1.7             # models/base.py
+tqdm>=4.60             # models/der.py, utils/data_manager.py
+Pillow>=9.0            # utils/data_manager.py, utils/ops.py
+
+# ── KHÔNG cần để chạy main_fl.py ──────────────────────────────────────────────
+# matplotlib, seaborn   chi dung trong trainer.py (ban TAP TRUNG cua SPCIL)
+# pandas                chi dung trong evaluate_all_checkpoints.py, fast_eval.py,
+#                       format_results.py — cac script danh gia chay rieng
+# fastreid              chi dung trong losses/cross_entroy_loss.py, ma der.py
+#                       khong import file do (no chi lay adasp_loss va ms_loss)
+# accimage              import LUOI trong ham accimage_loader(), khong bao gio
+#                       chay voi du lieu dang tensor
+#
+# Kaggle da co san tat ca cac goi tren, khong can cai them gi.

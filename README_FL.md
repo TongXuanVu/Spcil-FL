@@ -13,8 +13,25 @@ Repo **tự đủ** — clone một lần là chạy được, không cần kéo
 ```bash
 git clone https://github.com/TongXuanVu/Spcil-fl.git
 cd Spcil-fl
-pip install -r requirements.txt   # neu co, hoac: pip install torch numpy scikit-learn tqdm matplotlib seaborn
+pip install -r requirements.txt
 ```
+
+Hoặc gõ tay:
+
+```bash
+pip install torch torchvision "numpy<2" scikit-learn scipy tqdm Pillow
+```
+
+**Trên Kaggle không cần cài gì** — đủ cả bảy gói sẵn.
+
+Hai chỗ dễ vấp nếu cài tay:
+
+- **`torchvision` là bắt buộc**, dù bộ dữ liệu này không có ảnh. `utils/data_manager.py`
+  gọi `from torchvision import transforms` ở cấp module nên thiếu nó là lỗi import ngay.
+- **`numpy` phải `<2`** với torch 1.13, nếu không torch báo `Numpy is not available`.
+
+`matplotlib`, `seaborn`, `pandas`, `fastreid` **không cần** cho `main_fl.py` — chúng chỉ
+xuất hiện ở `trainer.py` (bản tập trung) và mấy script đánh giá chạy rời.
 
 Trong đó gồm hai nhóm file:
 
