@@ -137,34 +137,75 @@ def _nap_memory(local_models, buf):
         m._data_memory, m._targets_memory = d, t
 
 
-def _tim_memory(ckpt, path, start_task, num_clients):
+def _dung_memory(local_models, global_model, client_dms, args,
+                 task, known_before, total_now):
+    """Dựng exemplar memory cho mọi client, dùng trọng số toàn cục hiện tại.
+
+    `_construct_exemplar` của SPCIL là herding (chọn tham lam theo trung bình lớp
+    trong không gian đặc trưng), nên kết quả PHỤ THUỘC trọng số. Gọi hàm này với
+    mô hình cuối task N sẽ tái tạo đúng buffer mà task N lẽ ra sinh ra.
+    """
+    logging.info(f"  Dung exemplar memory cho {len(local_models)} client...")
+    for c, mdl in enumerate(local_models):
+        mdl._network.load_state_dict(global_model._network.state_dict())
+        mdl._network.to(args["device"][0])
+        mdl._cur_task = task
+        mdl._known_classes = known_before
+        mdl._total_classes = total_now
+        with _suppress_torch_save():
+            mdl.build_rehearsal_memory(client_dms[c], mdl.samples_per_class)
+
+
+def _tim_memory(ckpt, path, ckpt_task, start_task, num_clients):
     """Lấy exemplar buffer cho lần resume vào `start_task`.
 
-    Thứ tự: buffer nằm sẵn trong file resume -> `ckpt_task{start_task-1}_FINAL.pth`
-    cùng thư mục. Không thấy thì ném lỗi, KHÔNG chạy tiếp: thiếu buffer nghĩa là
-    huấn luyện không replay, kết quả sai mà không có dấu hiệu gì.
+    Trả về `(buffer, nguồn)`, hoặc `(None, "rebuild")` nếu buffer không có sẵn
+    nhưng dựng lại được.
+
+    Thứ tự tìm: buffer nằm sẵn trong file resume -> `ckpt_task{N}_FINAL.pth` cùng
+    thư mục -> dựng lại.
+
+    DỰNG LẠI chỉ đúng khi `ckpt_task == 0`. Lý do: `build_rehearsal_memory` gọi
+    `_reduce_exemplar` (thu nhỏ phần lớp cũ) rồi `_construct_exemplar` (thêm lớp
+    mới), nên buffer ở task N là kết quả TÍCH LUỸ của N+1 lần gọi, mỗi lần với
+    trọng số của task tương ứng. Ta chỉ có trọng số của `ckpt_task`, nên chỉ tái
+    tạo trọn vẹn được khi chuỗi đó dài đúng một mắt xích.
+
+    Với `ckpt_task > 0` mà thiếu buffer thì ném lỗi, KHÔNG đoán: dựng lại sẽ cho
+    buffer chỉ có lớp của task cuối, tức vẫn mất replay của các task trước mà
+    không có dấu hiệu gì.
     """
     buf, nguon = ckpt.get("client_memory"), os.path.basename(path)
-    if buf is None:
-        anh_em = os.path.join(os.path.dirname(path),
-                              f"ckpt_task{start_task - 1:02d}_FINAL.pth")
-        if not os.path.isfile(anh_em):
-            raise FileNotFoundError(
-                f"Resume vao task {start_task} nhung khong co exemplar memory.\n"
-                f"  '{nguon}' khong chua khoa 'client_memory', va khong thay "
-                f"'{os.path.basename(anh_em)}' trong '{os.path.dirname(path)}'.\n"
-                f"  Chay tiep se huan luyen KHONG co replay -> ket qua sai.\n"
-                f"  Checkpoint sinh truoc 2026-08-11 khong mang buffer; phai chay "
-                f"lai tu task 0, hoac resume tu mot ckpt_task*_FINAL.pth moi.")
+    if buf is not None:
+        if len(buf) != num_clients:
+            raise ValueError(f"'{nguon}' co buffer cua {len(buf)} client, "
+                             f"lan chay nay can {num_clients}.")
+        return buf, nguon
+
+    anh_em = os.path.join(os.path.dirname(path),
+                          f"ckpt_task{start_task - 1:02d}_FINAL.pth")
+    if os.path.isfile(anh_em):
         buf = torch.load(anh_em, map_location="cpu",
                          weights_only=False).get("client_memory")
-        nguon = os.path.basename(anh_em)
-        if buf is None:
-            raise KeyError(f"'{nguon}' khong chua 'client_memory' (checkpoint cu).")
-    if len(buf) != num_clients:
-        raise ValueError(f"'{nguon}' co buffer cua {len(buf)} client, "
-                         f"lan chay nay can {num_clients}.")
-    return buf, nguon
+        if buf is not None:
+            if len(buf) != num_clients:
+                raise ValueError(f"'{os.path.basename(anh_em)}' co buffer cua "
+                                 f"{len(buf)} client, can {num_clients}.")
+            return buf, os.path.basename(anh_em)
+
+    if ckpt_task == 0:
+        return None, "rebuild"
+
+    raise FileNotFoundError(
+        f"Resume vao task {start_task} nhung khong co exemplar memory.\n"
+        f"  '{nguon}' khong chua khoa 'client_memory', va khong thay "
+        f"'{os.path.basename(anh_em)}' trong '{os.path.dirname(path)}'.\n"
+        f"  Trong so trong file thuoc task {ckpt_task} > 0 nen KHONG dung lai "
+        f"duoc: buffer la ket qua tich luy qua {ckpt_task + 1} task, can trong "
+        f"so cua tung task moi tai tao dung.\n"
+        f"  Chay tiep se huan luyen KHONG co replay -> ket qua sai.\n"
+        f"  Cach xu ly: resume tu mot ckpt_task*_FINAL.pth sinh sau 2026-08-11, "
+        f"hoac chay lai tu task 0.")
 
 
 def _expand_one(model, dm, known_before):
@@ -258,7 +299,7 @@ def _train_federated(args):
                      "f1_mic", "f1_mac", "f1_wei", "loss"])
 
     # ── Resume ────────────────────────────────────────────────────────────────
-    start_task, start_round, ckpt = 0, 0, None
+    start_task, start_round, ckpt, ckpt_task, rebuild_mem = 0, 0, None, 0, False
     if args.get("resume"):
         path = args["resume"]
         if not os.path.isfile(path):
@@ -278,10 +319,20 @@ def _train_federated(args):
         # Task 0 chua co exemplar nao nen buffer rong la dung; tu task 1 tro di
         # thi buffer la bat buoc (xem khoi EXEMPLAR MEMORY o dau file).
         if start_task > 0:
-            buf, nguon = _tim_memory(ckpt, path, start_task, num_clients)
-            _nap_memory(local_models, buf)
-            logging.info(f"[RESUME] Da nap exemplar memory tu {nguon} | "
-                         f"client 0: {len(buf[0][1]):,} mau")
+            buf, nguon = _tim_memory(ckpt, path, ckpt_task, start_task,
+                                     num_clients)
+            if buf is None:
+                # Checkpoint cuoi task 0 kieu cu: 30 round da huan luyen xong,
+                # chi thieu buoc dung memory (lan chay 09-08 chet dung o day).
+                # Dung lai bang chinh trong so nay -> khong phai train lai.
+                rebuild_mem = True
+                logging.info("[RESUME] Checkpoint khong co exemplar memory nhung "
+                             "thuoc task 0 -> se dung lai tu trong so nay, "
+                             "khong can huan luyen lai 30 round.")
+            else:
+                _nap_memory(local_models, buf)
+                logging.info(f"[RESUME] Da nap exemplar memory tu {nguon} | "
+                             f"client 0: {len(buf[0][1]):,} mau")
 
     bs = args["batch_size"]
     nw = args.get("num_workers", 0)
@@ -305,6 +356,16 @@ def _train_federated(args):
         if ckpt is not None and task == ckpt_task:
             global_model._network.load_state_dict(ckpt["model_state_dict"])
             logging.info(f"[RESUME] Da nap trong so toan cuc (kien truc task {task}).")
+
+            # Buoc con thieu cua lan chay truoc: dung memory bang chinh trong so
+            # vua nap. Herding phu thuoc trong so, ma day dung la trong so cuoi
+            # task 0 -> tai tao dung buffer ma lan chay do le ra sinh ra.
+            if rebuild_mem:
+                global_model._network.to(args["device"][0])
+                _dung_memory(local_models, global_model, client_dms, args,
+                             task, known_before, total_now)
+                logging.info(f"[RESUME] Da dung lai exemplar memory | "
+                             f"client 0: {local_models[0].exemplar_size:,} mau")
 
         if task < start_task:
             continue
@@ -401,16 +462,8 @@ def _train_federated(args):
                              known_before, args.get("keep_last_ckpt", 3))
 
         # ── Hết task: dựng exemplar memory MỘT LẦN cho mỗi client ─────────────
-        logging.info(f"  Dung exemplar memory cho {num_clients} client...")
-        for c in range(num_clients):
-            mdl = local_models[c]
-            mdl._network.load_state_dict(global_model._network.state_dict())
-            mdl._network.to(args["device"][0])
-            mdl._cur_task = task
-            mdl._known_classes = known_before
-            mdl._total_classes = total_now
-            with _suppress_torch_save():
-                mdl.build_rehearsal_memory(client_dms[c], mdl.samples_per_class)
+        _dung_memory(local_models, global_model, client_dms, args,
+                     task, known_before, total_now)
 
         final = os.path.join(ckpt_dir, f"ckpt_task{task:02d}_FINAL.pth")
         torch.save({"task": task, "round": num_rounds,
