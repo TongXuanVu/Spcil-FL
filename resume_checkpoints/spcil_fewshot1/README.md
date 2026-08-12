@@ -1,20 +1,33 @@
-# SPCIL-FL — kịch bản 1%, checkpoint giữa chừng (global round 109/180)
+# SPCIL-FL — kịch bản 1%, ĐÃ CHẠY XONG 180/180 round
 
-Lần chạy `11-08-26 09-01`, resume từ `../ckpt_task00_full.pth`. Đã xong task 1 và
-task 2, đang ở task 3 round 19/30.
+Hai phiên Kaggle, cùng resume từ `../ckpt_task00_full.pth`:
 
-    ckpt_round0109_task03_r019_acc77.6.pth   trong so, kien truc task 3
-    ckpt_task02_FINAL.pth                    exemplar memory cua 100 client
+| phiên | global round | ghi chú |
+|---|---|---|
+| `11-08-26 09-01` | 31–109 | xong task 1, 2; đứt giữa task 3 |
+| `11-08-26 13-26` | 110–180 | chạy nốt task 3, 4, 5 |
 
-**Hai file phải nằm CÙNG một thư mục.** Checkpoint giữa task không mang buffer
-(buffer không đổi trong lúc một task chạy), nên `_tim_memory` trong `trainer_fl.py`
-tự tìm `ckpt_task{N-1}_FINAL.pth` bên cạnh file resume. Tách hai file ra hai chỗ
-là chương trình dừng với thông báo thiếu memory.
+`metrics_spcil_fl_fewshot1_180_rounds.csv` là bản gộp của cả hai, 150 dòng liền
+mạch từ global_round 31 đến 180, không thiếu round nào. Task 0 (round 1–30)
+không có ở đây vì dùng chung với bản full — lấy từ `../metrics_task00_full.csv`.
 
-    python main_fl.py --config exps_fl/cic_iot23_fl_fewshot1.json \
-        --data_root "<.../100client>" \
-        --fewshot_dir "<.../federated_data_fewshot>" \
-        --resume resume_checkpoints/spcil_fewshot1/ckpt_round0109_task03_r019_acc77.6.pth
+## Kết quả (macro-F1, round cuối mỗi task)
 
-Kết quả tới lúc này (macro-F1 round cuối mỗi task): task 1 = 33.11, task 2 = 16.22,
-task 3 ở round 19 = 26.64.
+| task | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| 1% | 40.00* | 33.11 | 16.22 | 27.49 | 16.54 | 27.91 |
+
+\* task 0 dùng chung với bản full.
+
+Không sụp đổ theo task — dao động 16–33 chứ không rơi về 0 như F2SCIL hay
+AFSIC-IoV. Điểm yếu của SPCIL trong FL nằm ở mức tuyệt đối (task 0 chỉ đạt 40.00
+so với 68.83 của bản tập trung, và quá nửa lượt huấn luyện cục bộ có
+`Train_accy 0.00`), không phải ở khả năng giữ lớp cũ.
+
+## Checkpoint
+
+`ckpt_task05_FINAL.pth` — mô hình cuối cùng, kèm `client_memory` của 100 client
+(exemplar client 0: 2.034 mẫu). Đủ để đánh giá lại sau này mà không phải chạy lại.
+
+Các checkpoint giữa chừng (`ckpt_round0109`, `ckpt_task02_FINAL`) đã gỡ vì lần
+chạy đã xong, không còn cần resume. Chúng vẫn nằm trong lịch sử git nếu cần.
