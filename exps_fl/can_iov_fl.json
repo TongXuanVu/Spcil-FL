@@ -1,0 +1,39 @@
+{
+  "_comment": "SPCIL-FL — IoV (CAN-bus), kich ban FULL DATA. 100 client, 5 task x 30 round = 150 round. Khop quy uoc voi hfin-der/wa va afsic-iov ban 100 client.",
+  "prefix": "can_iov_fl",
+  "dataset": "can_iov_fl",
+  "model_name": "der",
+  "convnet_type": "cnn1d",
+
+  "_comment_fl": "Mo phong mot tien trinh: client chay tuan tu, FedAvg co trong so theo so mau (McMahan 2017).",
+  "num_clients": 100,
+  "num_rounds": 30,
+  "fedavg_weighted": true,
+
+  "_comment_task": "13 lop chia [3,3,3,2,2] — khop cach chia that cua bo IoV 100 client (xem AFSIC-IOV/tools/make_fewshot_iov100.py va CLAUDE.md). KHONG suy tu init_cls/increment.",
+  "init_cls": 3,
+  "increment": 3,
+  "task_increments": [3, 3, 3, 2, 2],
+
+  "_comment_epoch": "epochs = so epoch CUC BO moi round (khong phai moi task).",
+  "epochs": 1,
+  "init_epoch": 1,
+  "batch_size": 512,
+  "eval_batch_size": 4096,
+
+  "_comment_mem": "memory_percent 0.01 = replay 1%, dong nhat voi nhan 'replay 1%' cua cac phuong phap khac. KHONG khai bao memory_size/memory_per_class: base.py uu tien memory_percent, hai truong kia se thanh cau hinh chet, chi gay hieu nham.",
+  "memory_percent": 0.01,
+  "fixed_memory": false,
+
+  "_comment_spcil": "Hai loss rieng cua SPCIL, giu nguyen mac dinh cua ban tap trung.",
+  "lambda_a": 0.01,
+  "lambda_b": 0.01,
+
+  "shuffle": false,
+  "device": [0],
+  "seed": [42],
+  "keep_last_ckpt": 3,
+
+  "data_root": "",
+  "fewshot_dir": ""
+}

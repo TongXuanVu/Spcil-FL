@@ -21,7 +21,11 @@ class BaseLearner(object):
         self._network = None
         self._old_network = None
         self._data_memory, self._targets_memory = np.array([]), np.array([])
-        self.topk = 5
+        # topk khong duoc vuot qua so lop cua task dau, khong thi torch.topk bao
+        # "k out of range". IoV: init_cls=3 -> topk=3. IoT: init_cls=6 -> topk=5
+        # (giu nguyen hanh vi cu). Chi anh huong metric "top{k}", ban FL chi doc
+        # "top1" nen khong doi ket qua.
+        self.topk = min(5, args.get("init_cls", 5))
 
         self._memory_size = args.get("memory_size", 5000)
         self._memory_per_class = args.get("memory_per_class", None)

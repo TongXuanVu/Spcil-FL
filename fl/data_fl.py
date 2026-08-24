@@ -1,20 +1,29 @@
-"""Bộ nạp dữ liệu FEDERATED cho SPCIL-FL — CIC-IoT23, 100 client.
+"""Bộ nạp dữ liệu FEDERATED cho SPCIL-FL — CIC-IoT23 và CAN-bus/IoV, 100 client.
 
 Đọc `client_<cid>_task_<t>.pt` của ĐÚNG MỘT client. Trainer tạo một DataManager cho
 mỗi client, mỗi lần gọi `set_client(cid)` trước.
 
 Ba kịch bản, chọn bằng `set_fewshot_dir()`:
 
-    None                        -> full data, task 1..6
-    .../federated_data_fewshot  -> 1%,      task 2..6 (task 1 vẫn lấy full)
-    .../federated_data_10shot   -> 10-shot, task 2..6 (task 1 vẫn lấy full)
+    None                        -> full data, task 1..NUM_TASKS
+    .../federated_data_fewshot  -> 1%,      task 2..NUM_TASKS (task 1 vẫn lấy full)
+    .../federated_data_10shot   -> 10-shot, task 2..NUM_TASKS (task 1 vẫn lấy full)
 
 Hai thư mục few-shot cố tình không có task 1, vì task 0 (base) dùng chung cho cả ba
-kịch bản — đúng quy ước của AFSIC-IDS và HFIN.
+kịch bản — đúng quy ước của AFSIC-IDS và HFIN (IoV cũng theo quy ước này, xem
+AFSIC-IOV/tools/make_fewshot_iov100.py: TASK_BASE = 1).
 
-LƯU Ý — `class_order` luôn là 0..33 bất kể client đó giữ lớp nào. Nếu để DataManager
-tự suy từ `np.unique(train_targets)` thì mỗi client sẽ có thứ tự lớp khác nhau, nhãn
-bị ánh xạ lệch, và mô hình gộp lại vô nghĩa.
+Hỗ trợ nhiều bộ dữ liệu qua CAU_HINH_BO bên dưới. `register()` tự nhận diện bộ
+dữ liệu theo tên trong `--dataset`/config JSON và gọi `set_dataset()` hộ — không
+cần sửa main_fl.py/trainer_fl.py.
+
+LƯU Ý — `class_order` luôn là 0..N-1 bất kể client đó giữ lớp nào (N = số lớp của
+bộ dữ liệu đang chọn). Nếu để DataManager tự suy từ `np.unique(train_targets)` thì
+mỗi client sẽ có thứ tự lớp khác nhau, nhãn bị ánh xạ lệch, và mô hình gộp lại vô
+nghĩa. Vì đây là identity map [0,1,...,N-1] và nhãn IoT/IoV đều đã tuần tự sẵn
+(IoV không cần remap — xem CLAUDE.md), giữ class_order dài hơn N một chút KHÔNG
+gây lỗi (order.index(label) vẫn đúng); nhưng vẫn cập nhật đúng N trong set_dataset()
+để n_lop hiển thị/log chính xác.
 """
 import glob
 import os
@@ -22,23 +31,71 @@ import os
 import numpy as np
 import torch
 
-NUM_CLASSES = 34
-NUM_TASKS = 6
+# ── Cấu hình theo từng bộ dữ liệu ───────────────────────────────────────────────
+# increments: kích thước từng task, khớp cách chia thật của bộ 100 client — KHÔNG
+# suy từ init_cls/increment (công thức đó cho ra sai số, vd IoT sẽ ra [6,6,6,6,6,4]).
+CAU_HINH_BO = {
+    "cic_iot23": dict(
+        num_classes=34,
+        num_tasks=6,
+        increments=[6, 6, 6, 6, 5, 5],
+        names=("cic_iot23_fl", "ciciot23_fl", "cic-iot23-fl"),
+        n_feat_fallback=33,
+    ),
+    "can_iov": dict(
+        num_classes=13,
+        num_tasks=5,
+        increments=[3, 3, 3, 2, 2],
+        names=("can_iov_fl", "caniov_fl", "can-iov-fl", "iov_fl", "iov100_fl"),
+        n_feat_fallback=31,
+    ),
+}
+_ALL_NAMES = {ten: key for key, cfg in CAU_HINH_BO.items() for ten in cfg["names"]}
 
-# Kích thước từng task, khớp với cách chia thật của bộ 100 client.
-# KHÔNG suy từ init_cls/increment: công thức đó cho [6,6,6,6,6,4].
-TASK_INCREMENTS = [6, 6, 6, 6, 5, 5]
-
-DATASET_NAMES = ("cic_iot23_fl", "ciciot23_fl", "cic-iot23-fl")
+BO_HIEN_TAI = "cic_iot23"                              # mặc định, giữ tương thích ngược
+NUM_CLASSES = CAU_HINH_BO[BO_HIEN_TAI]["num_classes"]
+NUM_TASKS = CAU_HINH_BO[BO_HIEN_TAI]["num_tasks"]
+TASK_INCREMENTS = list(CAU_HINH_BO[BO_HIEN_TAI]["increments"])
+DATASET_NAMES = CAU_HINH_BO[BO_HIEN_TAI]["names"]
 
 # Chỉ client này nạp tập test — xem ghi chú trong download_data().
 # Trainer đánh giá mô hình toàn cục bằng client_dms[TEST_OWNER].
+# Đúng cho cả hai bộ: client 0 luôn nằm trong dải 0-49 có mặt ở mọi task.
 TEST_OWNER = 0
 
 # ── Trạng thái toàn cục, trainer đặt trước khi tạo mỗi DataManager ─────────────
 CLIENT_ID = 0
 FEWSHOT_DIR = None
 DATA_ROOT = None
+
+
+def set_dataset(ten):
+    """Chuyển cấu hình toàn cục (NUM_CLASSES/NUM_TASKS/TASK_INCREMENTS/class_order)
+    sang bộ dữ liệu `ten` (khoá trong CAU_HINH_BO, vd "can_iov"). `register()` gọi
+    hàm này tự động khi nhận ra tên dataset trong config; cũng có thể gọi tay từ
+    ngoài trước khi train nếu muốn log tường minh.
+    """
+    global BO_HIEN_TAI, NUM_CLASSES, NUM_TASKS, TASK_INCREMENTS, DATASET_NAMES
+    if ten not in CAU_HINH_BO:
+        raise SystemExit(f"[FL-DATA] Dataset khong ho tro: {ten}. Chi co: {list(CAU_HINH_BO)}")
+    cfg = CAU_HINH_BO[ten]
+    BO_HIEN_TAI = ten
+    NUM_CLASSES = cfg["num_classes"]
+    NUM_TASKS = cfg["num_tasks"]
+    TASK_INCREMENTS = list(cfg["increments"])
+    DATASET_NAMES = cfg["names"]
+    # class_order la class attribute (khong phai bien module) -> phai gan truc tiep
+    # tren class de moi instance moi tao sau nay doc dung, khong the "reassign" ten
+    # module-level vi khong ai import class_order rieng ca.
+    iCICIoT23FL.class_order = list(range(NUM_CLASSES))
+    # Xoa cache test/n_feat cu (phong truong hop doi bo dataset trong cung process,
+    # vd chay thu nghiem nhieu bo lien tiep khong khoi dong lai Python).
+    if hasattr(iCICIoT23FL, "_test_cache"):
+        del iCICIoT23FL._test_cache
+    if hasattr(iCICIoT23FL, "_n_feat"):
+        del iCICIoT23FL._n_feat
+    print(f"[FL-DATA] set_dataset({ten}): {NUM_CLASSES} lop, {NUM_TASKS} task, "
+          f"increments={TASK_INCREMENTS}")
 
 
 def set_client(cid):
@@ -155,11 +212,12 @@ class iCICIoT23FL:
             xs.append(x.numpy() if torch.is_tensor(x) else np.asarray(x))
             ys.append(y.numpy() if torch.is_tensor(y) else np.asarray(y))
 
+        n_feat_fb = CAU_HINH_BO[BO_HIEN_TAI]["n_feat_fallback"]
         if xs:
             self.train_data = np.concatenate(xs).astype(np.float32)
             self.train_targets = np.concatenate(ys).astype(np.int64)
         else:
-            self.train_data = np.zeros((0, 33), dtype=np.float32)
+            self.train_data = np.zeros((0, n_feat_fb), dtype=np.float32)
             self.train_targets = np.zeros((0,), dtype=np.int64)
 
         # ── Tập test: CHỈ client 0 nạp thật ──────────────────────────────────
@@ -186,7 +244,7 @@ class iCICIoT23FL:
             self.test_data, self.test_targets = iCICIoT23FL._test_cache
         else:
             n_feat = getattr(iCICIoT23FL, "_n_feat", None) \
-                or (self.train_data.shape[1] if len(self.train_data) else 33)
+                or (self.train_data.shape[1] if len(self.train_data) else n_feat_fb)
             self.test_data = np.zeros((0, n_feat), dtype=np.float32)
             self.test_targets = np.zeros((0,), dtype=np.int64)
 
@@ -212,10 +270,14 @@ def register():
     original = dm._get_idata
 
     def patched(dataset_name):
-        if str(dataset_name).lower() in DATASET_NAMES:
+        ten = str(dataset_name).lower()
+        key = _ALL_NAMES.get(ten)
+        if key:
+            if key != BO_HIEN_TAI:
+                set_dataset(key)
             return iCICIoT23FL()
         return original(dataset_name)
 
     dm._get_idata = patched
     dm._fl_registered = True
-    print(f"[FL-DATA] Da dang ky dataset: {', '.join(DATASET_NAMES)}")
+    print(f"[FL-DATA] Da dang ky dataset: {', '.join(_ALL_NAMES)}")
